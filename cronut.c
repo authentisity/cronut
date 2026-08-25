@@ -2,15 +2,23 @@
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdbool.h>
 
-#define max(a, b)                                                              \
-  ({                                                                           \
-    __typeof__(a) _a = (a);                                                    \
-    __typeof__(b) _b = (b);                                                    \
-    _a > _b ? _a : _b;                                                         \
+#define max(a, b)           \
+  ({                        \
+    __typeof__(a) _a = (a); \
+    __typeof__(b) _b = (b); \
+    _a > _b ? _a : _b;      \
   })
 
-#define rad(x)                                                                 \
+#define min(a, b)           \
+  ({                        \
+    __typeof__(a) _a = (a); \
+    __typeof__(b) _b = (b); \
+    _a < _b ? _a : _b;      \
+  })
+
+#define rad(x) \
   (0.0174532925199432954743716805978692718781530857086181640625 * x)
 
 #define CELL_RATIO 2 // terminal characters ~twice as tall as wide
@@ -22,7 +30,10 @@
 #define delta 1e-4 // precision
 #define MAX_STEPS 96
 
-float f(float x, float y, float z) {
+#define CAMERA_Z 21
+
+float f(float x, float y, float z)
+{
   // Define shape
   const float R1 = 3.0;
   const float R2 = 5.0;
@@ -30,36 +41,46 @@ float f(float x, float y, float z) {
   return inner * inner + z * z - R2 * R2;
 }
 
-float grad(float *p) {
-  float gx =
-      (f(p[0] + delta, p[1], p[2]) - f(p[0] - delta, p[1], p[2])) / (2 * delta);
-  float gy =
-      (f(p[0], p[1] + delta, p[2]) - f(p[0], p[1] - delta, p[2])) / (2 * delta);
-  float gz =
-      (f(p[0], p[1], p[2] + delta) - f(p[0], p[1], p[2] - delta)) / (2 * delta);
-  float g = sqrt(gx * gx + gy * gy + gz * gz);
-  return g + 1e-9;
+void grad(float *p, float *g)
+{
+  g[0] = (f(p[0] + delta, p[1], p[2]) - f(p[0] - delta, p[1], p[2])) / (2 * delta);
+  g[1] = (f(p[0], p[1] + delta, p[2]) - f(p[0], p[1] - delta, p[2])) / (2 * delta);
+  g[2] = (f(p[0], p[1], p[2] + delta) - f(p[0], p[1], p[2] - delta)) / (2 * delta);
 }
 
-float sphere_trace(float *p, float *n) {
-  const float thres = 1e-3;
+float mag(float *p)
+{
+  float m = sqrt(p[0] * p[0] + p[1] * p[1] + p[2] * p[2]);
+  return m + 1e-9;
+}
+
+bool sphere_trace(float *p, float *p1, float *n)
+{
+  const float thres = 0.001;
   const float d_max = 100.0;
 
-  float p1[3];
   memcpy(p1, p, 3 * sizeof(float));
 
   float d = 0.0;
 
-  for (int i = 0; i < MAX_STEPS; i++) {
-    float t = f(p1[0], p1[1], p1[2]);
-
-    printf("iteration %i t: %f ", i + 1, t);
-
-    if (t < thres) {
-      break;
+  for (int i = 0; i < MAX_STEPS; i++)
+  {
+    if (d > d_max)
+    {
+      return false;
     }
 
-    float c = t / grad(p1);
+    float t = f(p1[0], p1[1], p1[2]);
+
+    // printf("iteration %i t: %f ", i + 1, t);
+
+    if (t < thres)
+    {
+      // printf("converged: %f\n", d);
+      return true;
+    }
+
+    float c = t / ({ float g[3]; grad(p, g); mag(g); });
 
     p1[0] += n[0] * c;
     p1[1] += n[1] * c;
@@ -67,17 +88,35 @@ float sphere_trace(float *p, float *n) {
 
     d += c;
 
-    printf("c: %f dist: %f new point: (%f, %f, %f)\n", c, d, p1[0], p1[1],
-           p1[2]);
+    // printf("c: %f dist: %f new point: (%f, %f, %f)\n", c, d, p1[0], p1[1],
+    //  p1[2]);
   }
 
-  return 1.0;
+  return false;
 }
 
-void ray(float i, float j, float *arr) {
+float lambertian(float *p)
+{
+  const float nl[3] = {
+      0.57735026919,
+      0.57735026919,
+      0.57735026919};
+
+  float g[3];
+  grad(p, g);
+  float m = mag(g);
+  float ng[3] = {g[0] / m, g[1] / m, g[2] / m};
+
+  float Id = max(0, ng[0] * nl[0] + ng[1] * nl[1] + ng[1] * nl[1]);
+
+  return min(1.0, Id + 0.1);
+}
+
+void ray(float i, float j, float *arr)
+{
   float scale = tan(rad(FOV / 2));
   float u = (2 * i + 1) / W - 1;
-  float v = 1 - (2 * j + 1) / W;
+  float v = 1 - (2 * j + 1) / H;
 
   // normalize
   float m = sqrt(u * u + v * v + 1.0);
@@ -87,14 +126,44 @@ void ray(float i, float j, float *arr) {
   arr[2] = 1 / m;
 }
 
-int main() {
-  float ray1[3];
-  ray(0, 0, ray1);
-  for (int i = 0; i < 3; i++) {
-    printf("%f ", ray1[i]);
-  }
-  printf("%f\n", grad((float[]){2.0, 0.0, 0.0}));
-  printf("%f\n", grad(ray1));
+int main()
+{
+  float rays[W * H][3];
+  float buf[W * H];
 
-  sphere_trace((float[]){0, 15.0, 5.0}, (float[]){0, -1, 0});
+  for (int i = 0; i < W; i++)
+  {
+    for (int j = 0; j < H; j++)
+    {
+      ray(i, j, rays[i * H + j]);
+    }
+  }
+
+  float p1[3];
+
+  for (int i = 0; i < W; i++)
+  {
+    for (int j = 0; j < H; j++)
+    {
+      if (sphere_trace((float[]){0, 0, -CAMERA_Z}, p1, rays[i * H + j]))
+      {
+        buf[i * H + j] = lambertian(p1);
+      }
+      else
+      {
+        buf[i * H + j] = 0.0;
+      }
+      printf("%f\n", buf[i * H + j]);
+    }
+  }
+
+  printf("\x1b[H");
+  for (int j = 0; j < H; j++)
+  {
+    for (int i = 0; i < W; i++)
+    {
+      putchar(" .,-~:;=!*#$@"[(int)(buf[i * H + j] * 12)]);
+    }
+    putchar('\n');
+  }
 }
