@@ -18,19 +18,18 @@
     _a < _b ? _a : _b;      \
   })
 
-#define rad(x) \
-  (0.0174532925199432954743716805978692718781530857086181640625 * x)
-
 #define CELL_RATIO 2 // terminal characters ~twice as tall as wide
+#define SCALE_FAC 30
 
 #define W 80
 #define H 24
-#define FOV 72
+#define FOV_H 2 * atan((float)W / SCALE_FAC)
+#define FOV_V 2 * atan((float)(H * CELL_RATIO) / SCALE_FAC)
 
 #define delta 1e-4 // precision
 #define MAX_STEPS 96
 
-#define CAMERA_Z 21
+#define CAMERA_Z 11
 
 float f(float x, float y, float z)
 {
@@ -80,7 +79,7 @@ bool sphere_trace(float *p, float *p1, float *n)
       return true;
     }
 
-    float c = t / ({ float g[3]; grad(p, g); mag(g); });
+    float c = t / ({ float g[3]; grad(p1, g); mag(g); });
 
     p1[0] += n[0] * c;
     p1[1] += n[1] * c;
@@ -114,9 +113,8 @@ float lambertian(float *p)
 
 void ray(float i, float j, float *arr)
 {
-  float scale = tan(rad(FOV / 2));
-  float u = (2 * i + 1) / W - 1;
-  float v = 1 - (2 * j + 1) / H;
+  float u = ((2 * i + 1) / W - 1) * tan(FOV_H / 2);
+  float v = (1 - (2 * j + 1) / H) * tan(FOV_V / 2);
 
   // normalize
   float m = sqrt(u * u + v * v + 1.0);
@@ -136,6 +134,7 @@ int main()
     for (int j = 0; j < H; j++)
     {
       ray(i, j, rays[i * H + j]);
+      // printf("%f ", rays[i * H + j][0]);
     }
   }
 
@@ -153,7 +152,6 @@ int main()
       {
         buf[i * H + j] = 0.0;
       }
-      printf("%f\n", buf[i * H + j]);
     }
   }
 
