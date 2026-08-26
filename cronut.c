@@ -20,23 +20,27 @@
   })
 
 #define CELL_RATIO 2 // terminal characters ~twice as tall as wide
-#define SCALE_FAC 30
+#define SCALE 30
 
 #define W 80
 #define H 24
-#define FOV_H 2 * atan((float)W / SCALE_FAC)
-#define FOV_V 2 * atan((float)(H * CELL_RATIO) / SCALE_FAC)
+#define FOV_H 2.0f * atanf((float)W / SCALE)
+#define FOV_V 2.0f * atanf((float)(H * CELL_RATIO) / SCALE)
 
-#define delta 1e-4 // precision
+#define delta 1e-4f // precision
 #define MAX_STEPS 96
 
-#define CAMERA_Z 16
+#define CAMERA_Z 3
+
+// convergence tolerance should be much smaller than character cell size
+#define PIXEL_W (2.0f * CAMERA_Z / SCALE)
+#define THRES (PIXEL_W / 256.0f)
 
 void rot(float *p, float *p1, float x, float y) {
-  float a = sin(x);
-  float b = cos(x);
-  float c = sin(y);
-  float d = cos(y);
+  float a = sinf(x);
+  float b = cosf(x);
+  float c = sinf(y);
+  float d = cosf(y);
 
   p1[0] = p[0] * d + p[1] * a * c + p[2] * b * c;
   p1[1] = p[1] * b - p[2] * a;
@@ -44,7 +48,17 @@ void rot(float *p, float *p1, float x, float y) {
 }
 
 float f(float x, float y, float z) {
-  // Define shape
+  // lemniscate
+  const float R = 0.35f;
+  float s = x * x + y * y;
+  float comp = (s * s) - 8 * (x * x - y * y);
+  // adds thickness to thinnest part of curve
+  float cx = 4 * x * (s - 4);
+  float cy = 4 * y * (s + 4);
+  float g = comp / (sqrtf(cx * cx + cy * cy) + 1e-6f);
+  return g * g + z * z - R * R;
+
+  // donut
   const float R1 = 3.0;
   const float R2 = 5.0;
   float inner = sqrt(x * x + y * y) - R1 * R1;
@@ -61,17 +75,17 @@ void grad(float *p, float *g) {
 }
 
 float mag(float *p) {
-  float m = sqrt(p[0] * p[0] + p[1] * p[1] + p[2] * p[2]);
-  return m + 1e-9;
+  float m = sqrtf(p[0] * p[0] + p[1] * p[1] + p[2] * p[2]);
+  return m + 1e-9f;
 }
 
 bool sphere_trace(float *p, float *p1, float *n) {
-  const float thres = 0.001;
-  const float d_max = 100.0;
+  const float thres = THRES; // world units, not units of f
+  const float d_max = 100.0f;
 
   memcpy(p1, p, 3 * sizeof(float));
 
-  float d = 0.0;
+  float d = 0.0f;
 
   for (int i = 0; i < MAX_STEPS; i++) {
     if (d > d_max) {
@@ -82,16 +96,16 @@ bool sphere_trace(float *p, float *p1, float *n) {
 
     // printf("iteration %i t: %f ", i + 1, t);
 
-    if (t < thres) {
-      // printf("converged: %f\n", d);
-      return true;
-    }
-
     float c = t / ({
                 float g[3];
                 grad(p1, g);
                 mag(g);
               });
+
+    if (fabsf(c) < thres) {
+      // printf("converged: %f\n", d);
+      return true;
+    }
 
     p1[0] += n[0] * c;
     p1[1] += n[1] * c;
@@ -112,17 +126,17 @@ float lambertian(float *p, float *nl) {
   float m = mag(g);
   float ng[3] = {g[0] / m, g[1] / m, g[2] / m};
 
-  float Id = max(0, ng[0] * nl[0] + ng[1] * nl[1] + ng[2] * nl[2]);
+  float Id = max(0.0f, ng[0] * nl[0] + ng[1] * nl[1] + ng[2] * nl[2]);
 
   return Id;
 }
 
 void ray(float i, float j, float *arr) {
-  float u = ((2 * i + 1) / W - 1) * tan(FOV_H / 2);
-  float v = (1 - (2 * j + 1) / H) * tan(FOV_V / 2);
+  float u = ((2 * i + 1) / W - 1) * tanf(FOV_H / 2);
+  float v = (1 - (2 * j + 1) / H) * tanf(FOV_V / 2);
 
   // normalize
-  float m = sqrt(u * u + v * v + 1.0);
+  float m = sqrtf(u * u + v * v + 1.0f);
 
   arr[0] = u / m;
   arr[1] = v / m;
@@ -181,7 +195,7 @@ int main() {
     }
     usleep(30000);
 
-    alpha = fmodf(alpha + 0.07, 6.28);
-    beta = fmodf(beta + 0.02, 6.28);
+    alpha = fmodf(alpha + 0.07f, 6.28f);
+    beta = fmodf(beta + 0.02f, 6.28f);
   }
 }
