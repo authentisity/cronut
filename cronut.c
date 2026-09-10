@@ -1,4 +1,3 @@
-#include <float.h>
 #include <math.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -12,18 +11,11 @@
     _a > _b ? _a : _b;                                                         \
   })
 
-#define min(a, b)                                                              \
-  ({                                                                           \
-    __typeof__(a) _a = (a);                                                    \
-    __typeof__(b) _b = (b);                                                    \
-    _a < _b ? _a : _b;                                                         \
-  })
-
 #define CELL_RATIO 2 // terminal characters ~twice as tall as wide
 #define SCALE 30
 
-#define W 80
-#define H 24
+#define W 79
+#define H 23
 #define FOV_H 2.0f * atanf((float)W / SCALE)
 #define FOV_V 2.0f * atanf((float)(H * CELL_RATIO) / SCALE)
 
@@ -79,6 +71,8 @@ float mag(float *p) {
   return m + 1e-9f;
 }
 
+static float f0;
+
 bool sphere_trace(float *p, float *p1, float *n) {
   const float thres = THRES; // world units, not units of f
   const float d_max = 100.0f;
@@ -94,16 +88,13 @@ bool sphere_trace(float *p, float *p1, float *n) {
 
     float t = f(p1[0], p1[1], p1[2]);
 
-    // printf("iteration %i t: %f ", i + 1, t);
-
     float c = t / ({
                 float g[3];
                 grad(p1, g);
                 mag(g);
               });
 
-    if (fabsf(c) < thres) {
-      // printf("converged: %f\n", d);
+    if (fabsf(c) < thres && fabsf(t) <= f0) {
       return true;
     }
 
@@ -112,9 +103,6 @@ bool sphere_trace(float *p, float *p1, float *n) {
     p1[2] += n[2] * c;
 
     d += c;
-
-    // printf("c: %f dist: %f new point: (%f, %f, %f)\n", c, d, p1[0], p1[1],
-    //  p1[2]);
   }
 
   return false;
@@ -150,20 +138,25 @@ int main() {
   float camera_rot[3];
   float light_rot[3];
 
-  char b[W * H];
+  char b[(W + 1) * H];
   float p1[3];
 
   for (int i = 0; i < W; i++) {
     for (int j = 0; j < H; j++) {
-      ray(i, j, rays[i * H + j]);
+      ray(i, j, rays[j * W + i]);
     }
   }
 
-  float alpha = 0.0;
-  float beta = 0.0;
+  for (int j = 0; j < H; j++) {
+    b[(j + 1) * (W + 1) - 1] = '\n';
+  }
 
-  while (true) {
+  f0 = fabsf(f(0, 0, -CAMERA_Z));
 
+  float alpha = 0.0f;
+  float beta = 0.0f;
+
+  while (1) {
     rot((float[]){0, 0, -CAMERA_Z}, camera_rot, alpha, beta);
     rot((float[]){0, 1, -1}, light_rot, alpha, beta);
 
@@ -174,28 +167,24 @@ int main() {
 
     for (int i = 0; i < W; i++) {
       for (int j = 0; j < H; j++) {
+        int idx = j * W + i;
 
-        int idx = i * H + j;
         rot(rays[idx], rays_rot[idx], alpha, beta);
 
         if (sphere_trace(camera_rot, p1, rays_rot[idx])) {
-          b[idx] = ".,-~:;=!*#$@"[(int)(lambertian(p1, light_rot) * 11)];
+          b[idx + j] = ".,-~:;=!*#$@"[(int)(lambertian(p1, light_rot) * 11)];
         } else {
-          b[idx] = ' ';
+          b[idx + j] = ' ';
         }
       }
     }
 
-    printf("\x1b[H");
-    for (int j = 0; j < H; j++) {
-      for (int i = 0; i < W; i++) {
-        putchar(b[i * H + j]);
-      }
-      putchar('\n');
-    }
+    fwrite(b, 1, (W + 1) * H, stdout);
     usleep(30000);
 
     alpha = fmodf(alpha + 0.07f, 6.28f);
     beta = fmodf(beta + 0.02f, 6.28f);
+
+    fputs("\x1b[23A", stdout);
   }
 }
