@@ -1,43 +1,30 @@
 #include <math.h>
-#include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
 
-#define max(a, b)                                                              \
-  ({                                                                           \
-    __typeof__(a) _a = (a);                                                    \
-    __typeof__(b) _b = (b);                                                    \
-    _a > _b ? _a : _b;                                                         \
-  })
-
-#define CELL_RATIO 2 // terminal characters ~twice as tall as wide
-#define SCALE 30
-
+// terminal
 #define W 79
 #define H 23
-#define FOV_H 2.0f * atanf((float)W / SCALE)
-#define FOV_V 2.0f * atanf((float)(H * CELL_RATIO) / SCALE)
 
-#define delta 1e-4f // precision
+// settings
+#define SCALE 30
+#define CAMERA_Z 3
+#define A_SPEED 0.07f
+#define B_SPEED 0.02f
+#define DELAY 30000
+#define LIGHT 0, 1, -1
+#define LUM ".,-~:;=!*#$@"
+
+// precision
+#define dt 1e-4f
 #define MAX_STEPS 96
 
-#define CAMERA_Z 3
-
 // convergence tolerance should be much smaller than character cell size
-#define PIXEL_W (2.0f * CAMERA_Z / SCALE)
-#define THRES (PIXEL_W / 256.0f)
+#define THRES (CAMERA_Z / (SCALE * 128.0f))
+#define D_MAX 100.0f
 
-void rot(float *p, float *p1, float x, float y) {
-  float a = sinf(x);
-  float b = cosf(x);
-  float c = sinf(y);
-  float d = cosf(y);
-
-  p1[0] = p[0] * d + p[1] * a * c + p[2] * b * c;
-  p1[1] = p[1] * b - p[2] * a;
-  p1[2] = -p[0] * c + p[1] * a * d + p[2] * b * d;
-}
+float A, B, f0;
 
 float f(float x, float y, float z) {
   // lemniscate
@@ -53,37 +40,35 @@ float f(float x, float y, float z) {
   // donut
   const float R1 = 3.0;
   const float R2 = 5.0;
-  float inner = sqrt(x * x + y * y) - R1 * R1;
+  float inner = sqrt(x * x + y * y) - R1;
   return inner * inner + z * z - R2 * R2;
 }
 
+void rot(float *p, float *q) {
+  float a = sinf(A), b = cosf(A), c = sinf(B), d = cosf(B);
+  q[0] = p[0] * d + p[1] * a * c + p[2] * b * c;
+  q[1] = p[1] * b - p[2] * a;
+  q[2] = -p[0] * c + p[1] * a * d + p[2] * b * d;
+}
+
 void grad(float *p, float *g) {
-  g[0] =
-      (f(p[0] + delta, p[1], p[2]) - f(p[0] - delta, p[1], p[2])) / (2 * delta);
-  g[1] =
-      (f(p[0], p[1] + delta, p[2]) - f(p[0], p[1] - delta, p[2])) / (2 * delta);
-  g[2] =
-      (f(p[0], p[1], p[2] + delta) - f(p[0], p[1], p[2] - delta)) / (2 * delta);
+  g[0] = (f(p[0] + dt, p[1], p[2]) - f(p[0] - dt, p[1], p[2])) / (2 * dt);
+  g[1] = (f(p[0], p[1] + dt, p[2]) - f(p[0], p[1] - dt, p[2])) / (2 * dt);
+  g[2] = (f(p[0], p[1], p[2] + dt) - f(p[0], p[1], p[2] - dt)) / (2 * dt);
 }
 
 float mag(float *p) {
-  float m = sqrtf(p[0] * p[0] + p[1] * p[1] + p[2] * p[2]);
-  return m + 1e-9f;
+  return sqrtf(p[0] * p[0] + p[1] * p[1] + p[2] * p[2]) + 1e-9f;
 }
 
-static float f0;
-
-bool sphere_trace(float *p, float *p1, float *n) {
-  const float thres = THRES; // world units, not units of f
-  const float d_max = 100.0f;
-
+char sphere_trace(float *p, float *p1, float *n) {
   memcpy(p1, p, 3 * sizeof(float));
 
   float d = 0.0f;
 
   for (int i = 0; i < MAX_STEPS; i++) {
-    if (d > d_max) {
-      return false;
+    if (d > D_MAX) {
+      return 0;
     }
 
     float t = f(p1[0], p1[1], p1[2]);
@@ -94,8 +79,8 @@ bool sphere_trace(float *p, float *p1, float *n) {
                 mag(g);
               });
 
-    if (fabsf(c) < thres && fabsf(t) <= f0) {
-      return true;
+    if (fabsf(c) < THRES && fabsf(t) <= f0) {
+      return 1;
     }
 
     p1[0] += n[0] * c;
@@ -105,7 +90,7 @@ bool sphere_trace(float *p, float *p1, float *n) {
     d += c;
   }
 
-  return false;
+  return 1;
 }
 
 float lambertian(float *p, float *nl) {
@@ -114,14 +99,14 @@ float lambertian(float *p, float *nl) {
   float m = mag(g);
   float ng[3] = {g[0] / m, g[1] / m, g[2] / m};
 
-  float Id = max(0.0f, ng[0] * nl[0] + ng[1] * nl[1] + ng[2] * nl[2]);
+  float Id = fmaxf(0.0f, ng[0] * nl[0] + ng[1] * nl[1] + ng[2] * nl[2]);
 
   return Id;
 }
 
 void ray(float i, float j, float *arr) {
-  float u = ((2 * i + 1) / W - 1) * tanf(FOV_H / 2);
-  float v = (1 - (2 * j + 1) / H) * tanf(FOV_V / 2);
+  float u = (2 * i + 1 - W) / SCALE;
+  float v = 2 * (H - 2 * j - 1) / SCALE;
 
   // normalize
   float m = sqrtf(u * u + v * v + 1.0f);
@@ -153,12 +138,9 @@ int main() {
 
   f0 = fabsf(f(0, 0, -CAMERA_Z));
 
-  float alpha = 0.0f;
-  float beta = 0.0f;
-
-  while (1) {
-    rot((float[]){0, 0, -CAMERA_Z}, camera_rot, alpha, beta);
-    rot((float[]){0, 1, -1}, light_rot, alpha, beta);
+  for (;;) {
+    rot((float[]){0, 0, -CAMERA_Z}, camera_rot);
+    rot((float[]){0, 1, -1}, light_rot);
 
     float lm = mag(light_rot);
     light_rot[0] /= lm;
@@ -169,10 +151,10 @@ int main() {
       for (int j = 0; j < H; j++) {
         int idx = j * W + i;
 
-        rot(rays[idx], rays_rot[idx], alpha, beta);
+        rot(rays[idx], rays_rot[idx]);
 
         if (sphere_trace(camera_rot, p1, rays_rot[idx])) {
-          b[idx + j] = ".,-~:;=!*#$@"[(int)(lambertian(p1, light_rot) * 11)];
+          b[idx + j] = LUM[(int)(lambertian(p1, light_rot) * 11)];
         } else {
           b[idx + j] = ' ';
         }
@@ -180,10 +162,10 @@ int main() {
     }
 
     fwrite(b, 1, (W + 1) * H, stdout);
-    usleep(30000);
+    usleep(DELAY);
 
-    alpha = fmodf(alpha + 0.07f, 6.28f);
-    beta = fmodf(beta + 0.02f, 6.28f);
+    A = fmodf(A + A_SPEED, 2 * M_PI);
+    B = fmodf(B + B_SPEED, 2 * M_PI);
 
     fputs("\x1b[23A", stdout);
   }
