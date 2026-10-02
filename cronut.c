@@ -1,6 +1,5 @@
 #include <math.h>
 #include <stdio.h>
-#include <string.h>
 #include <unistd.h>
 
 // terminal
@@ -19,12 +18,19 @@
 // precision
 #define dt 1e-4f
 #define MAX_STEPS 96
-
 // convergence tolerance should be much smaller than character cell size
 #define THRES (CAMERA_Z / (SCALE * 128.0f))
 #define D_MAX 100.0f
 
-float A, B, f0;
+#define D(a, b) (a[0] * b[0] + a[1] * b[1] + a[2] * b[2])
+#define G(a, b, c)                                                             \
+  (f(p[0] + a, p[1] + b, p[2] + c) - f(p[0] - a, p[1] - b, p[2] - c)) / (2 * dt)
+#define T(p)                                                                   \
+  {p[0] * y + p[1] * u * x + p[2] * v * x, p[1] * v - p[2] * u,                \
+   -p[0] * x + p[1] * u * y + p[2] * v * y}
+
+float A, B;
+char b[(W + 1) * H];
 
 float f(float x, float y, float z) {
   // lemniscate
@@ -36,137 +42,38 @@ float f(float x, float y, float z) {
   float cy = 4 * y * (s + 4);
   float g = comp / (sqrtf(cx * cx + cy * cy) + 1e-6f);
   return g * g + z * z - R * R;
-
-  // donut
-  const float R1 = 3.0;
-  const float R2 = 5.0;
-  float inner = sqrt(x * x + y * y) - R1;
-  return inner * inner + z * z - R2 * R2;
-}
-
-void rot(float *p, float *q) {
-  float a = sinf(A), b = cosf(A), c = sinf(B), d = cosf(B);
-  q[0] = p[0] * d + p[1] * a * c + p[2] * b * c;
-  q[1] = p[1] * b - p[2] * a;
-  q[2] = -p[0] * c + p[1] * a * d + p[2] * b * d;
-}
-
-void grad(float *p, float *g) {
-  g[0] = (f(p[0] + dt, p[1], p[2]) - f(p[0] - dt, p[1], p[2])) / (2 * dt);
-  g[1] = (f(p[0], p[1] + dt, p[2]) - f(p[0], p[1] - dt, p[2])) / (2 * dt);
-  g[2] = (f(p[0], p[1], p[2] + dt) - f(p[0], p[1], p[2] - dt)) / (2 * dt);
-}
-
-float mag(float *p) {
-  return sqrtf(p[0] * p[0] + p[1] * p[1] + p[2] * p[2]) + 1e-9f;
-}
-
-char sphere_trace(float *p, float *p1, float *n) {
-  memcpy(p1, p, 3 * sizeof(float));
-
-  float d = 0.0f;
-
-  for (int i = 0; i < MAX_STEPS; i++) {
-    if (d > D_MAX) {
-      return 0;
-    }
-
-    float t = f(p1[0], p1[1], p1[2]);
-
-    float c = t / ({
-                float g[3];
-                grad(p1, g);
-                mag(g);
-              });
-
-    if (fabsf(c) < THRES && fabsf(t) <= f0) {
-      return 1;
-    }
-
-    p1[0] += n[0] * c;
-    p1[1] += n[1] * c;
-    p1[2] += n[2] * c;
-
-    d += c;
-  }
-
-  return 1;
-}
-
-float lambertian(float *p, float *nl) {
-  float g[3];
-  grad(p, g);
-  float m = mag(g);
-  float ng[3] = {g[0] / m, g[1] / m, g[2] / m};
-
-  float Id = fmaxf(0.0f, ng[0] * nl[0] + ng[1] * nl[1] + ng[2] * nl[2]);
-
-  return Id;
-}
-
-void ray(float i, float j, float *arr) {
-  float u = (2 * i + 1 - W) / SCALE;
-  float v = 2 * (H - 2 * j - 1) / SCALE;
-
-  // normalize
-  float m = sqrtf(u * u + v * v + 1.0f);
-
-  arr[0] = u / m;
-  arr[1] = v / m;
-  arr[2] = 1 / m;
 }
 
 int main() {
-  float rays[W * H][3];
-  float rays_rot[W * H][3];
-
-  float camera_rot[3];
-  float light_rot[3];
-
-  char b[(W + 1) * H];
-  float p1[3];
-
-  for (int i = 0; i < W; i++) {
-    for (int j = 0; j < H; j++) {
-      ray(i, j, rays[j * W + i]);
-    }
-  }
-
-  for (int j = 0; j < H; j++) {
-    b[(j + 1) * (W + 1) - 1] = '\n';
-  }
-
-  f0 = fabsf(f(0, 0, -CAMERA_Z));
-
+  float f0 = fabsf(f(0, 0, -CAMERA_Z));
   for (;;) {
-    rot((float[]){0, 0, -CAMERA_Z}, camera_rot);
-    rot((float[]){0, 1, -1}, light_rot);
-
-    float lm = mag(light_rot);
-    light_rot[0] /= lm;
-    light_rot[1] /= lm;
-    light_rot[2] /= lm;
-
-    for (int i = 0; i < W; i++) {
-      for (int j = 0; j < H; j++) {
-        int idx = j * W + i;
-
-        rot(rays[idx], rays_rot[idx]);
-
-        if (sphere_trace(camera_rot, p1, rays_rot[idx])) {
-          b[idx + j] = LUM[(int)(lambertian(p1, light_rot) * 11)];
-        } else {
-          b[idx + j] = ' ';
+    float u = sinf(A), v = cosf(A), x = sinf(B), y = cosf(B),
+          l[] = T(((float[]){LIGHT}));
+    char *o = b;
+    for (int j = 0; j < H; j++, *o++ = '\n')
+      for (int i = 0; i < W; i++) {
+        float p[] = T(((float[]){0, 0, -CAMERA_Z})),
+              n[] = T(((float[]){2 * i + 1 - W, 2 * (H - 2 * j - 1), SCALE})),
+              m = sqrtf(D(n, n)), g[3], t, c, d = 0;
+        for (int k = 0; k < MAX_STEPS && d <= D_MAX; k++) {
+          t = f(p[0], p[1], p[2]);
+          g[0] = G(dt, 0, 0), g[1] = G(0, dt, 0), g[2] = G(0, 0, dt);
+          c = t / (sqrtf(D(g, g)) + 1e-9f);
+          if (fabsf(c) < THRES && fabsf(t) <= f0)
+            break;
+          for (int q = 0; q < 3; q++)
+            p[q] += n[q] / m * c;
+          d += c;
         }
+        *o++ = d > D_MAX
+                   ? ' '
+                   : LUM[(int)(fmaxf(0, D(g, l) / sqrtf(D(g, g) * D(l, l))) *
+                               (sizeof LUM - 2))];
       }
-    }
-
     fwrite(b, 1, (W + 1) * H, stdout);
     usleep(DELAY);
-
     A = fmodf(A + A_SPEED, 2 * M_PI);
     B = fmodf(B + B_SPEED, 2 * M_PI);
-
-    fputs("\x1b[23A", stdout);
+    printf("\x1b[%dA", H);
   }
 }
